@@ -566,6 +566,26 @@ public class ReplicationControlManagerTest {
     }
 
     @Test
+    public void testCreate10KTopics() {
+        ReplicationControlTestContext ctx = new ReplicationControlTestContext.Builder().build();
+        ReplicationControlManager replicationControl = ctx.replicationControl;
+        CreateTopicsRequestData request = new CreateTopicsRequestData();
+        // Create two topics with 5k partitions each
+        request.topics().add(new CreatableTopic().setName("foo").
+                setNumPartitions(5000).setReplicationFactor((short) 1));
+        request.topics().add(new CreatableTopic().setName("bar").
+                setNumPartitions(5001).setReplicationFactor((short) 1));
+        // Add one topic with -2 partitions, if we don't ignore it we can still potentially exceed the cutoff
+        request.topics().add(new CreatableTopic().setName("baz").
+                setNumPartitions(-2).setReplicationFactor((short) 1));
+        ControllerRequestContext requestContext = anonymousContextFor(ApiKeys.CREATE_TOPICS);
+        PolicyViolationException error = assertThrows(
+                PolicyViolationException.class,
+                () -> replicationControl.createTopics(requestContext, request, Set.of("foo", "bar", "baz")));
+        assertEquals(error.getMessage(), "Number of partitions across all topics should be less than 10000");
+    }
+
+    @Test
     public void testCreateTopics() {
         ReplicationControlTestContext ctx = new ReplicationControlTestContext.Builder().build();
         ReplicationControlManager replicationControl = ctx.replicationControl;

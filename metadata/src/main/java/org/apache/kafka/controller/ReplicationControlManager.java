@@ -605,6 +605,17 @@ public class ReplicationControlManager {
         Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges =
             computeConfigChanges(topicErrors, request.topics());
 
+        int totalPartitions = 0;
+        for (CreatableTopic topic: request.topics()) {
+            // Negative numPartitions are possible, so exclude them from the total.
+            if (topic.numPartitions() > 0) {
+                totalPartitions += topic.numPartitions();
+            }
+        }
+        if (totalPartitions > 10_000) {
+            throw new PolicyViolationException("Number of partitions across all topics should be less than 10000");
+        }
+
         // Try to create whatever topics are needed.
         Map<String, CreatableTopicResult> successes = new HashMap<>();
         for (CreatableTopic topic : request.topics()) {
