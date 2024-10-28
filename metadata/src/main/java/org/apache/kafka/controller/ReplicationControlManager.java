@@ -152,6 +152,7 @@ import static org.apache.kafka.metadata.LeaderConstants.NO_LEADER_CHANGE;
  */
 public class ReplicationControlManager {
     static final int MAX_ELECTIONS_PER_IMBALANCE = 1_000;
+    static final int MAX_PARTITIONS_PER_BATCH = 10_000;
 
     static class Builder {
         private SnapshotRegistry snapshotRegistry = null;
@@ -592,6 +593,8 @@ public class ReplicationControlManager {
         Map<String, ApiError> topicErrors = new HashMap<>();
         List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
 
+        validateEstimatedTotalNumberOfPartitions(request, defaultNumPartitions);
+
         // Check the topic names.
         validateNewTopicNames(topicErrors, request.topics(), topicsWithCollisionChars);
 
@@ -604,16 +607,6 @@ public class ReplicationControlManager {
         // configurations should be created.
         Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges =
             computeConfigChanges(topicErrors, request.topics());
-
-        int totalPartitions = 0;
-        for (CreatableTopic topic: request.topics()) {
-            if (topic.numPartitions() > 0) {
-                totalPartitions += topic.numPartitions();
-            }
-        }
-        if (totalPartitions > 10_000) {
-            throw new PolicyViolationException("Excessively large number of partitions per request.");
-        }
 
         // Try to create whatever topics are needed.
         Map<String, CreatableTopicResult> successes = new HashMap<>();
@@ -1144,6 +1137,34 @@ public class ReplicationControlManager {
         }
 
         return ControllerResult.of(records, response);
+    }
+
+    /**
+     * Validates that a batch of topics will create less than {@value MAX_PARTITIONS_PER_BATCH}. Exceeding this number of topics per batch
+     * has led to out-of-memory exceptions. We use this validation to fail earlier to avoid allocating the memory.
+     * This validation assumes that all the topics in the batch are valid and can be created.
+     *
+     * @param request a batch of topics to create.
+     * @param defaultNumPartitions default number of partitions to assign if unspecified.
+     * @throws PolicyViolationException if total number of partitions exceeds {@value MAX_PARTITIONS_PER_BATCH}.
+     */
+    static void validateEstimatedTotalNumberOfPartitions(CreateTopicsRequestData request, int defaultNumPartitions) {
+        int totalPartitions = 0;
+        for (CreatableTopic topic: request.topics()) {
+            if (topic.assignments().isEmpty()) {
+                if (topic.numPartitions() == -1) {
+                    totalPartitions += defaultNumPartitions;
+                } else if (topic.numPartitions() > 0) {
+                    totalPartitions += topic.numPartitions();
+                }
+            } else {
+                totalPartitions += topic.assignments().size();
+            }
+
+        }
+        if (totalPartitions > MAX_PARTITIONS_PER_BATCH) {
+            throw new PolicyViolationException("Excessively large number of partitions per request.");
+        }
     }
 
     /**
