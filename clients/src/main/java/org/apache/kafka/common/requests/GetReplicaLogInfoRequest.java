@@ -28,6 +28,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class GetReplicaLogInfoRequest extends AbstractRequest {
+    public static final int MAX_PARTITIONS_PER_REQUEST = 1000;
+
     public static class Builder extends AbstractRequest.Builder<GetReplicaLogInfoRequest> {
 
         private final GetReplicaLogInfoRequestData data;
