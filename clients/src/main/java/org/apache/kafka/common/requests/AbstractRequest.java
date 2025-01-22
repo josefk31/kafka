@@ -349,7 +349,7 @@ public abstract class AbstractRequest implements AbstractRequestResponse {
             case DESCRIBE_SHARE_GROUP_OFFSETS:
                 return DescribeShareGroupOffsetsRequest.parse(buffer, apiVersion);
             case GET_REPLICA_LOG_INFO:
-                    return GetReplicaLogInfoRequest.parse(buffer, apiVersion);
+                return GetReplicaLogInfoRequest.parse(buffer, apiVersion);
             default:
                 throw new AssertionError(String.format("ApiKey %s is not currently handled in `parseRequest`, the " +
                         "code should be updated to do so.", apiKey));
