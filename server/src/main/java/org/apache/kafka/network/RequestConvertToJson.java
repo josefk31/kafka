@@ -191,6 +191,8 @@ import org.apache.kafka.common.message.WriteShareGroupStateRequestDataJsonConver
 import org.apache.kafka.common.message.WriteShareGroupStateResponseDataJsonConverter;
 import org.apache.kafka.common.message.WriteTxnMarkersRequestDataJsonConverter;
 import org.apache.kafka.common.message.WriteTxnMarkersResponseDataJsonConverter;
+import org.apache.kafka.common.message.GetReplicaLogInfoRequestDataJsonConverter;
+import org.apache.kafka.common.message.GetReplicaLogInfoResponseDataJsonConverter;
 import org.apache.kafka.common.network.ClientInformation;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
@@ -370,6 +372,8 @@ import org.apache.kafka.common.requests.WriteShareGroupStateRequest;
 import org.apache.kafka.common.requests.WriteShareGroupStateResponse;
 import org.apache.kafka.common.requests.WriteTxnMarkersRequest;
 import org.apache.kafka.common.requests.WriteTxnMarkersResponse;
+import org.apache.kafka.common.requests.GetReplicaLogInfoRequest;
+import org.apache.kafka.common.requests.GetReplicaLogInfoResponse;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.BooleanNode;
@@ -559,6 +563,8 @@ public class RequestConvertToJson {
                 return WriteShareGroupStateRequestDataJsonConverter.write(((WriteShareGroupStateRequest) request).data(), request.version());
             case WRITE_TXN_MARKERS:
                 return WriteTxnMarkersRequestDataJsonConverter.write(((WriteTxnMarkersRequest) request).data(), request.version());
+            case GET_REPLICA_LOG_INFO:
+                return GetReplicaLogInfoRequestDataJsonConverter.write(((GetReplicaLogInfoRequest) request).data(), request.version());
             default:
                 throw new IllegalStateException("ApiKey " + request.apiKey() + " is not currently handled in `request`, the " +
                     "code should be updated to do so.");
@@ -741,6 +747,8 @@ public class RequestConvertToJson {
                 return WriteShareGroupStateResponseDataJsonConverter.write(((WriteShareGroupStateResponse) response).data(), version);
             case WRITE_TXN_MARKERS:
                 return WriteTxnMarkersResponseDataJsonConverter.write(((WriteTxnMarkersResponse) response).data(), version);
+            case GET_REPLICA_LOG_INFO:
+                return GetReplicaLogInfoResponseDataJsonConverter.write(((GetReplicaLogInfoResponse) response).data(), version);
             default:
                 throw new IllegalStateException("ApiKey " + response.apiKey() + " is not currently handled in `response`, the " +
                     "code should be updated to do so.");

@@ -73,6 +73,7 @@ import java.time.Duration
 import java.util
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{CompletableFuture, ConcurrentHashMap}
+import java.util.function.Supplier
 import java.util.{Collections, Optional}
 import scala.annotation.nowarn
 import scala.collection.mutable.ArrayBuffer
@@ -103,7 +104,8 @@ class KafkaApis(val requestChannel: RequestChannel,
                 time: Time,
                 val tokenManager: DelegationTokenManager,
                 val apiVersionManager: ApiVersionManager,
-                val clientMetricsManager: ClientMetricsManager
+                val clientMetricsManager: ClientMetricsManager,
+                val brokerEpochSupplier: Supplier[java.lang.Long]
 ) extends ApiRequestHandler with Logging {
 
   type FetchResponseStats = Map[TopicPartition, RecordValidationStats]
@@ -238,6 +240,7 @@ class KafkaApis(val requestChannel: RequestChannel,
         case ApiKeys.DELETE_SHARE_GROUP_STATE => handleDeleteShareGroupStateRequest(request)
         case ApiKeys.READ_SHARE_GROUP_STATE_SUMMARY => handleReadShareGroupStateSummaryRequest(request)
         case ApiKeys.DESCRIBE_SHARE_GROUP_OFFSETS => handleDescribeShareGroupOffsetsRequest(request)
+        case ApiKeys.GET_REPLICA_LOG_INFO => handleGetReplicaLogInfo(request)
         case _ => throw new IllegalStateException(s"No handler for request api key ${request.header.apiKey}")
       }
     } catch {
@@ -253,6 +256,52 @@ class KafkaApis(val requestChannel: RequestChannel,
       if (request.apiLocalCompleteTimeNanos < 0)
         request.apiLocalCompleteTimeNanos = time.nanoseconds
     }
+  }
+
+  private def handleGetReplicaLogInfo(request: RequestChannel.Request): Unit = {
+    authHelper.authorizeClusterOperation(request, CLUSTER_ACTION)
+    val getReplicaLogInfoRequest = request.body[GetReplicaLogInfoRequest]
+    val data = getReplicaLogInfoRequest.data()
+    var partitionCount = 0
+    // TODO Check if we can refactor this to make it more testable
+    val partitionInfoList = data.topicPartitions().asScala.map(topic => {
+      val topicName = metadataCache.topicIdsToNames get topic.topicId()
+      val logInfos = topic.partitions().asScala
+        .map(new TopicPartition(topicName, _))
+        // TODO Since there is no way to return a null result in the API
+        .map((partition: TopicPartition) => {
+          partitionCount += 1
+          if (partitionCount > 1000) {
+            new GetReplicaLogInfoResponseData.PartitionLogInfo()
+              .setErrorCode(Errors.POLICY_VIOLATION.code())
+              .setErrorMessage("No more than 1000 partitions per request are allowed")
+          } else replicaManager.getPartitionOrError(partition) match {
+            case Left(err) => new GetReplicaLogInfoResponseData.PartitionLogInfo().setErrorCode(err.code()).setErrorMessage(err.message())
+            case Right(partition) =>
+              // TODO We must check whether it is kosher to grab information like this
+              // In cases where we have an unclean shutdown, will we be able to access the log?
+              // Potentially we may want to return some sort of error state if we cannot access the logs
+              // This applies for all cases
+              val offset = partition.localLogOrException.logEndOffset
+              val leaderEpoch = partition.getLeaderEpoch
+              val lastWrittenOffset = partition.localLogOrException.latestEpoch.getOrElse(-1)
+              new GetReplicaLogInfoResponseData.PartitionLogInfo()
+                .setPartition(partition.partitionId)
+                .setLogEndOffset(offset)
+                .setCurrentLeaderEpoch(leaderEpoch)
+                .setLastWrittenLeaderEpoch(lastWrittenOffset)
+          }
+        })
+      new GetReplicaLogInfoResponseData.TopicPartitionLogInfo()
+        .setTopicId(topic.topicId())
+        .setPartitionLogInfo(logInfos.asJava)
+    })
+
+    // TODO Look in too -1
+    val responseData = new GetReplicaLogInfoResponseData()
+      .setTopicPartitionLogInfoList(partitionInfoList.asJava)
+      .setBrokerEpoch(brokerEpochSupplier.get())
+    requestHelper.sendMaybeThrottle(request, new GetReplicaLogInfoResponse(responseData))
   }
 
   override def tryCompleteActions(): Unit = {

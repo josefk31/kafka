@@ -206,7 +206,8 @@ class KafkaApisTest extends Logging {
       time = time,
       tokenManager = null,
       apiVersionManager = apiVersionManager,
-      clientMetricsManager = clientMetricsManager)
+      clientMetricsManager = clientMetricsManager,
+      brokerEpochSupplier = () => -1L)
   }
 
   private def setupFeatures(featureVersions: Seq[FeatureVersion]): Unit = {
