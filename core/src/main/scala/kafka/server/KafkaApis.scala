@@ -258,11 +258,13 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
   }
 
-  private def handleGetReplicaLogInfo(request: RequestChannel.Request): Unit = {
+  def handleGetReplicaLogInfo(request: RequestChannel.Request): Unit = {
     authHelper.authorizeClusterOperation(request, CLUSTER_ACTION)
+
     val getReplicaLogInfoRequest = request.body[GetReplicaLogInfoRequest]
     val data = getReplicaLogInfoRequest.data()
     var partitionCount = 0
+
     // TODO Check if we can refactor this to make it more testable
     val partitionInfoList = data.topicPartitions().asScala.map(topic => {
       val topicName = metadataCache.topicIdsToNames get topic.topicId()
@@ -284,6 +286,7 @@ class KafkaApis(val requestChannel: RequestChannel,
               // This applies for all cases
               val offset = partition.localLogOrException.logEndOffset
               val leaderEpoch = partition.getLeaderEpoch
+              // Expected case sometimes, we should return a -1
               val lastWrittenOffset = partition.localLogOrException.latestEpoch.getOrElse(-1)
               new GetReplicaLogInfoResponseData.PartitionLogInfo()
                 .setPartition(partition.partitionId)
@@ -297,7 +300,6 @@ class KafkaApis(val requestChannel: RequestChannel,
         .setPartitionLogInfo(logInfos.asJava)
     })
 
-    // TODO Look in too -1
     val responseData = new GetReplicaLogInfoResponseData()
       .setTopicPartitionLogInfoList(partitionInfoList.asJava)
       .setBrokerEpoch(brokerEpochSupplier.get())
