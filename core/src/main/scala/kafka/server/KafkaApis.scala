@@ -260,39 +260,39 @@ class KafkaApis(val requestChannel: RequestChannel,
 
   def handleGetReplicaLogInfo(request: RequestChannel.Request): Unit = {
     authHelper.authorizeClusterOperation(request, CLUSTER_ACTION)
-
     val getReplicaLogInfoRequest = request.body[GetReplicaLogInfoRequest]
     val data = getReplicaLogInfoRequest.data()
     var partitionCount = 0
 
-    // TODO Check if we can refactor this to make it more testable
     val partitionInfoList = data.topicPartitions().asScala.map(topic => {
       val topicName = metadataCache.topicIdsToNames get topic.topicId()
       val logInfos = topic.partitions().asScala
         .map(new TopicPartition(topicName, _))
-        // TODO Since there is no way to return a null result in the API
         .map((partition: TopicPartition) => {
           partitionCount += 1
-          if (partitionCount > 1000) {
+          if (partitionCount > GetReplicaLogInfoRequest.MAX_PARTITIONS_PER_REQUEST) {
             new GetReplicaLogInfoResponseData.PartitionLogInfo()
               .setErrorCode(Errors.POLICY_VIOLATION.code())
               .setErrorMessage("No more than 1000 partitions per request are allowed")
           } else replicaManager.getPartitionOrError(partition) match {
-            case Left(err) => new GetReplicaLogInfoResponseData.PartitionLogInfo().setErrorCode(err.code()).setErrorMessage(err.message())
-            case Right(partition) =>
-              // TODO We must check whether it is kosher to grab information like this
-              // In cases where we have an unclean shutdown, will we be able to access the log?
-              // Potentially we may want to return some sort of error state if we cannot access the logs
-              // This applies for all cases
-              val offset = partition.localLogOrException.logEndOffset
-              val leaderEpoch = partition.getLeaderEpoch
-              // Expected case sometimes, we should return a -1
-              val lastWrittenOffset = partition.localLogOrException.latestEpoch.getOrElse(-1)
-              new GetReplicaLogInfoResponseData.PartitionLogInfo()
-                .setPartition(partition.partitionId)
-                .setLogEndOffset(offset)
-                .setCurrentLeaderEpoch(leaderEpoch)
-                .setLastWrittenLeaderEpoch(lastWrittenOffset)
+            case Left(err) => new GetReplicaLogInfoResponseData.PartitionLogInfo()
+              .setErrorCode(err.code())
+              .setErrorMessage(err.message())
+            case Right(partition) => partition.log match {
+              case None => new GetReplicaLogInfoResponseData.PartitionLogInfo()
+                .setErrorCode(Errors.LOG_DIR_NOT_FOUND.code())
+                .setErrorMessage(Errors.LOG_DIR_NOT_FOUND.message())
+              case Some(log) => {
+                val offset = log.logEndOffset
+                val lastWrittenOffset = log.latestEpoch.getOrElse(-1)
+                val leaderEpoch = partition.getLeaderEpoch
+                new GetReplicaLogInfoResponseData.PartitionLogInfo()
+                  .setPartition(partition.partitionId)
+                  .setLogEndOffset(offset)
+                  .setCurrentLeaderEpoch(leaderEpoch)
+                  .setLastWrittenLeaderEpoch(lastWrittenOffset)
+              }
+            }
           }
         })
       new GetReplicaLogInfoResponseData.TopicPartitionLogInfo()

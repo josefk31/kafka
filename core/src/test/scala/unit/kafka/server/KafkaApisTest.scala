@@ -10533,7 +10533,7 @@ class KafkaApisTest extends Logging {
     when(log1.logEndOffset).thenReturn(100L)
     when(log1.latestEpoch).thenReturn(Some(10))
     val partition1 = mock(classOf[Partition])
-    when(partition1.localLogOrException).thenReturn(log1)
+    when(partition1.log).thenReturn(Some(log1))
     when(partition1.getLeaderEpoch).thenReturn(1)
     when(partition1.partitionId).thenReturn(1)
 
@@ -10541,7 +10541,7 @@ class KafkaApisTest extends Logging {
     when(log2.logEndOffset).thenReturn(200L)
     when(log2.latestEpoch).thenReturn(Some(20))
     val partition2 = mock(classOf[Partition])
-    when(partition2.localLogOrException).thenReturn(log2)
+    when(partition2.log).thenReturn(Some(log2))
     when(partition2.getLeaderEpoch).thenReturn(2)
     when(partition2.partitionId).thenReturn(2)
 
