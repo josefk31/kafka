@@ -18,6 +18,7 @@
 package org.apache.kafka.controller;
 
 import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.common.TopicIdPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.message.AllocateProducerIdsRequestData;
@@ -52,6 +53,7 @@ import org.apache.kafka.common.message.UpdateFeaturesResponseData;
 import org.apache.kafka.common.quota.ClientQuotaAlteration;
 import org.apache.kafka.common.quota.ClientQuotaEntity;
 import org.apache.kafka.common.requests.ApiError;
+import org.apache.kafka.controller.recoverymanager.LogInfoStore;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
 import org.apache.kafka.metadata.FinalizedControllerFeatures;
@@ -230,10 +232,12 @@ public interface Controller extends AclMutator, AutoCloseable {
      *
      * @return              A future yielding the elect leaders response.
      */
-    CompletableFuture<ElectLeadersResponseData> electLeaders(
+    CompletableFuture<ElectLeadersResponseData> performUncleanRecovery(
         ControllerRequestContext context,
         ElectLeadersRequestData request
     );
+
+    CompletableFuture<List<ApiError>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store);
 
     /**
      * Get the current finalized feature ranges for each feature.

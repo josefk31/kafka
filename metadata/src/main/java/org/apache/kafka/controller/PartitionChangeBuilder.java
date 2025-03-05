@@ -21,6 +21,8 @@ import org.apache.kafka.common.DirectoryId;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.AlterPartitionRequestData.BrokerState;
 import org.apache.kafka.common.metadata.PartitionChangeRecord;
+import org.apache.kafka.controller.recoverymanager.ElectionStateMachine;
+import org.apache.kafka.controller.recoverymanager.LogInfoStore;
 import org.apache.kafka.metadata.LeaderRecoveryState;
 import org.apache.kafka.metadata.PartitionRegistration;
 import org.apache.kafka.metadata.Replicas;
@@ -95,6 +97,7 @@ public class PartitionChangeBuilder {
     private List<Integer> targetElr;
     private List<Integer> targetLastKnownElr;
     private List<Integer> uncleanShutdownReplicas;
+    private Map<Integer, LogInfoStore.EpochOffset> replicaLogLengthMap;
     private Election election = Election.ONLINE;
     private LeaderRecoveryState targetLeaderRecoveryState;
     private boolean eligibleLeaderReplicasEnabled;
@@ -159,6 +162,11 @@ public class PartitionChangeBuilder {
 
     public PartitionChangeBuilder setElection(Election election) {
         this.election = election;
+        return this;
+    }
+
+    public PartitionChangeBuilder setReplicaLogLengthMap(Map<Integer, LogInfoStore.EpochOffset> replicaLogLengthMap) {
+        this.replicaLogLengthMap = replicaLogLengthMap;
         return this;
     }
 
@@ -277,9 +285,20 @@ public class PartitionChangeBuilder {
 
         if (election == Election.UNCLEAN) {
             // Attempt unclean leader election
-            Optional<Integer> uncleanLeader = targetReplicas.stream()
-                .filter(isAcceptableLeader::test)
-                .findFirst();
+            Optional<Integer> uncleanLeader;
+            if (replicaLogLengthMap == null) {
+                uncleanLeader = targetReplicas.stream()
+                        .filter(isAcceptableLeader::test)
+                        .findFirst();
+            } else {
+                // In this case, we have received some logs to help assist with investigation
+                uncleanLeader = targetReplicas.stream()
+                        .filter(isAcceptableLeader::test)
+                        .max((a, b) ->
+                            replicaLogLengthMap
+                                    .getOrDefault(a, LogInfoStore.EpochOffset.MIN)
+                                    .compareTo(replicaLogLengthMap.getOrDefault(b, LogInfoStore.EpochOffset.MIN)));
+            }
             if (uncleanLeader.isPresent()) {
                 return new ElectionResult(uncleanLeader.get(), true);
             }

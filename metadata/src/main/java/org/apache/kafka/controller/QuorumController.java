@@ -19,6 +19,8 @@ package org.apache.kafka.controller;
 
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
 import org.apache.kafka.clients.admin.FeatureUpdate;
+import org.apache.kafka.common.ElectionType;
+import org.apache.kafka.common.TopicIdPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -93,6 +95,7 @@ import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
+import org.apache.kafka.controller.recoverymanager.LogInfoStore;
 import org.apache.kafka.deferred.DeferredEvent;
 import org.apache.kafka.deferred.DeferredEventQueue;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
@@ -1869,7 +1872,7 @@ public final class QuorumController implements Controller {
     }
 
     @Override
-    public CompletableFuture<ElectLeadersResponseData> electLeaders(
+    public CompletableFuture<ElectLeadersResponseData> performUncleanRecovery(
         ControllerRequestContext context,
         ElectLeadersRequestData request
     ) {
@@ -1880,6 +1883,15 @@ public final class QuorumController implements Controller {
         }
         return appendWriteEvent("electLeaders", context.deadlineNs(),
             () -> replicationControl.electLeaders(request));
+    }
+
+    @Override
+    public CompletableFuture<List<ApiError>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store) {
+        if (topicIdPartitions.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return appendWriteEvent("performUncleanRecovery",
+                () -> replicationControl.performUncleanRecovery(topicIdPartitions, store));
     }
 
     @Override

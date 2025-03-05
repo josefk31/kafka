@@ -18,6 +18,7 @@
 package org.apache.kafka.common.test;
 
 import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.common.TopicIdPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -62,6 +63,7 @@ import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.controller.Controller;
 import org.apache.kafka.controller.ControllerRequestContext;
 import org.apache.kafka.controller.ResultOrError;
+import org.apache.kafka.controller.recoverymanager.LogInfoStore;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
 import org.apache.kafka.metadata.FinalizedControllerFeatures;
@@ -338,11 +340,16 @@ public class MockController implements Controller {
     }
 
     @Override
-    public CompletableFuture<ElectLeadersResponseData> electLeaders(
+    public CompletableFuture<ElectLeadersResponseData> performUncleanRecovery(
         ControllerRequestContext context,
         ElectLeadersRequestData request
     ) {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<Void> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store) {
+        return null;
     }
 
     @Override

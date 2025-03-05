@@ -80,6 +80,8 @@ import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AlterPartitionRequest;
 import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.controller.recoverymanager.ElectionDriver;
+import org.apache.kafka.controller.recoverymanager.LogInfoStore;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistration;
@@ -380,6 +382,9 @@ public class ReplicationControlManager {
      * A ClusterDescriber which supplies cluster information to our ReplicaPlacer.
      */
     final KRaftClusterDescriber clusterDescriber = new KRaftClusterDescriber();
+
+    // TODO Initialize this
+    ElectionDriver electionDriver;
 
     private ReplicationControlManager(
         SnapshotRegistry snapshotRegistry,
@@ -1468,6 +1473,13 @@ public class ReplicationControlManager {
         }
     }
 
+    ControllerResult<List<ApiError>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store) {
+        List<ApiError> results = new ArrayList<>(topicIdPartitions.size());
+        for (TopicIdPartition topicIdPartition : topicIdPartitions) {
+            results.add(electLeader())
+        }
+    }
+
     ControllerResult<ElectLeadersResponseData> electLeaders(ElectLeadersRequestData request) {
         ElectionType electionType = electionType(request.electionType());
         List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
@@ -1524,6 +1536,7 @@ public class ReplicationControlManager {
         }
     }
 
+    // TODO write a separate method for this... we're switching too and from uuid.. yuck.
     ApiError electLeader(String topic, int partitionId, ElectionType electionType,
                          List<ApiMessageAndVersion> records) {
         Uuid topicId = topicsByName.get(topic);
@@ -1753,11 +1766,17 @@ public class ReplicationControlManager {
             List<ApiMessageAndVersion> records,
             int maxElections
     ) {
+        // TODO just get the topic control info rather than looking it up
         Iterator<TopicIdPartition> iterator = brokersToIsrs.partitionsWithNoLeader();
+        List<TopicControlInfo> managedElections = new ArrayList<>();
         while (iterator.hasNext() && records.size() < maxElections) {
             TopicIdPartition topicIdPartition = iterator.next();
             TopicControlInfo topic = topics.get(topicIdPartition.topicId());
             if (configurationControl.uncleanLeaderElectionEnabledForTopic(topic.name)) {
+                if (configurationControl.uncleanRecoveryManagerEnabledForTopic(topic.name)) {
+                    managedElections.add(topics.remove(topicIdPartition.topicId()));
+                    continue;
+                }
                 ApiError result = electLeader(topic.name, topicIdPartition.partitionId(),
                         ElectionType.UNCLEAN, records);
                 if (result.error().equals(Errors.NONE)) {
@@ -1772,6 +1791,9 @@ public class ReplicationControlManager {
                                 "because unclean leader election is disabled for this topic.",
                         topic.name, topicIdPartition.partitionId());
             }
+        }
+        if (!managedElections.isEmpty()) {
+            electionDriver.startLeadershipElection(managedElections, clusterControl.brokerRegistrations());
         }
     }
 

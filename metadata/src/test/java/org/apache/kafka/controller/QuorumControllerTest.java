@@ -1156,7 +1156,7 @@ public class QuorumControllerTest {
                 controller.createPartitions(context0, Collections.singletonList(
                     new CreatePartitionsTopic()), false);
             CompletableFuture<ElectLeadersResponseData> electLeadersFuture =
-                controller.electLeaders(context0, new ElectLeadersRequestData().setTimeoutMs(0).
+                controller.performUncleanRecovery(context0, new ElectLeadersRequestData().setTimeoutMs(0).
                     setTopicPartitions(null));
             CompletableFuture<AlterPartitionReassignmentsResponseData> alterReassignmentsFuture =
                 controller.alterPartitionReassignments(context0,
@@ -1212,7 +1212,7 @@ public class QuorumControllerTest {
             CompletableFuture<List<CreatePartitionsTopicResult>> createPartitionsFuture =
                 controller.createPartitions(ANONYMOUS_CONTEXT, Collections.emptyList(), false);
             CompletableFuture<ElectLeadersResponseData> electLeadersFuture =
-                controller.electLeaders(ANONYMOUS_CONTEXT, new ElectLeadersRequestData());
+                controller.performUncleanRecovery(ANONYMOUS_CONTEXT, new ElectLeadersRequestData());
             CompletableFuture<AlterPartitionReassignmentsResponseData> alterReassignmentsFuture =
                 controller.alterPartitionReassignments(ANONYMOUS_CONTEXT,
                     new AlterPartitionReassignmentsRequestData());
