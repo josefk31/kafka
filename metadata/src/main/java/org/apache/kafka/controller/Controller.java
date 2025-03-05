@@ -52,10 +52,13 @@ import org.apache.kafka.common.message.UpdateFeaturesResponseData;
 import org.apache.kafka.common.quota.ClientQuotaAlteration;
 import org.apache.kafka.common.quota.ClientQuotaEntity;
 import org.apache.kafka.common.requests.ApiError;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
 import org.apache.kafka.metadata.FinalizedControllerFeatures;
 import org.apache.kafka.metadata.authorizer.AclMutator;
+import org.apache.kafka.server.common.TopicIdPartition;
 
 import java.util.Collection;
 import java.util.List;
@@ -234,6 +237,17 @@ public interface Controller extends AclMutator, AutoCloseable {
         ControllerRequestContext context,
         ElectLeadersRequestData request
     );
+
+    /**
+     * Performs an unclean recovery of the listed TopidIdPartitions.
+     * LogLengthInfoStore contains information about the logs for these replicas based on a phase of "gathering" log
+     * information - usually performed by the ElectionDriver.
+     *
+     * @param topicIdPartitions
+     * @param store
+     * @return
+     */
+    CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store);
 
     /**
      * Get the current finalized feature ranges for each feature.

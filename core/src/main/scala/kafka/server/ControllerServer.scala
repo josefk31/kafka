@@ -32,6 +32,7 @@ import org.apache.kafka.common.security.token.delegation.internals.DelegationTok
 import org.apache.kafka.common.utils.{LogContext, Utils}
 import org.apache.kafka.common.{ClusterResource, Endpoint, Uuid}
 import org.apache.kafka.controller.metrics.{ControllerMetadataMetricsPublisher, QuorumControllerMetrics}
+import org.apache.kafka.controller.recoverymanager.ElectionDriver
 import org.apache.kafka.controller.{Controller, QuorumController, QuorumFeatures}
 import org.apache.kafka.image.publisher.{ControllerRegistrationsPublisher, MetadataPublisher}
 import org.apache.kafka.metadata.{KafkaConfigSchema, ListenerInfo}
@@ -213,6 +214,20 @@ class ControllerServer(
         }
       }
 
+      val electionDriverBuilder = {
+        val networkClient = NetworkUtils.buildNetworkClient(
+          "election-driver-client-",
+          config,
+          metrics,
+          time,
+          logContext);
+        new ElectionDriver.Builder().
+          setController(controller).
+          setTime(time).
+          setKafkaClient(networkClient).
+          setNodeId(config.nodeId)
+      }
+
       val controllerBuilder = {
         val leaderImbalanceCheckIntervalNs = if (config.autoLeaderRebalanceEnable) {
           OptionalLong.of(TimeUnit.NANOSECONDS.convert(config.leaderImbalanceCheckIntervalSeconds, TimeUnit.SECONDS))
@@ -224,7 +239,7 @@ class ControllerServer(
 
         quorumControllerMetrics = new QuorumControllerMetrics(Optional.of(KafkaYammerMetrics.defaultRegistry), time)
 
-        new QuorumController.Builder(config.nodeId, sharedServer.clusterId).
+        val builder = new QuorumController.Builder(config.nodeId, sharedServer.clusterId).
           setTime(time).
           setThreadNamePrefix(s"quorum-controller-${config.nodeId}-").
           setConfigSchema(configSchema).
@@ -253,6 +268,11 @@ class ControllerServer(
           setInterBrokerListenerName(config.interBrokerListenerName.value()).
           setControllerPerformanceSamplePeriodMs(config.controllerPerformanceSamplePeriodMs).
           setControllerPerformanceAlwaysLogThresholdMs(config.controllerPerformanceAlwaysLogThresholdMs)
+
+        if (config.uncleanRecoveryManagerEnable) {
+          builder.setElectionDriver(electionDriverBuilder.build())
+        }
+        builder
       }
       controller = controllerBuilder.build()
 

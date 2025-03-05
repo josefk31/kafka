@@ -62,11 +62,14 @@ import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.controller.Controller;
 import org.apache.kafka.controller.ControllerRequestContext;
 import org.apache.kafka.controller.ResultOrError;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
 import org.apache.kafka.metadata.FinalizedControllerFeatures;
 import org.apache.kafka.server.authorizer.AclCreateResult;
 import org.apache.kafka.server.authorizer.AclDeleteResult;
+import org.apache.kafka.server.common.TopicIdPartition;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -342,6 +345,11 @@ public class MockController implements Controller {
         ControllerRequestContext context,
         ElectLeadersRequestData request
     ) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
         throw new UnsupportedOperationException();
     }
 

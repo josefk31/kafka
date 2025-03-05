@@ -94,6 +94,9 @@ import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
+import org.apache.kafka.controller.recoverymanager.ElectionDriver;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.deferred.DeferredEvent;
 import org.apache.kafka.deferred.DeferredEventQueue;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
@@ -117,6 +120,8 @@ import org.apache.kafka.server.authorizer.AclCreateResult;
 import org.apache.kafka.server.authorizer.AclDeleteResult;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
 import org.apache.kafka.server.common.KRaftVersion;
+import org.apache.kafka.server.common.MetadataVersion;
+import org.apache.kafka.server.common.TopicIdPartition;
 import org.apache.kafka.server.fault.FaultHandler;
 import org.apache.kafka.server.fault.FaultHandlerException;
 import org.apache.kafka.server.policy.AlterConfigPolicy;
@@ -226,6 +231,7 @@ public final class QuorumController implements Controller {
         private long delegationTokenExpiryCheckIntervalMs = TimeUnit.MINUTES.toMillis(5);
         private long uncleanLeaderElectionCheckIntervalMs = TimeUnit.MINUTES.toMillis(5);
         private String interBrokerListenerName = "PLAINTEXT";
+        private ElectionDriver electionDriver;
 
         public Builder(int nodeId, String clusterId) {
             this.nodeId = nodeId;
@@ -391,6 +397,11 @@ public final class QuorumController implements Controller {
             return this;
         }
 
+        public Builder setElectionDriver(ElectionDriver electionDriver) {
+            this.electionDriver = electionDriver;
+            return this;
+        }
+
         public QuorumController build() throws Exception {
             if (raftClient == null) {
                 throw new IllegalStateException("You must set a raft client.");
@@ -450,7 +461,8 @@ public final class QuorumController implements Controller {
                     uncleanLeaderElectionCheckIntervalMs,
                     interBrokerListenerName,
                     controllerPerformanceSamplePeriodMs,
-                    controllerPerformanceAlwaysLogThresholdMs
+                    controllerPerformanceAlwaysLogThresholdMs,
+                    electionDriver
                 );
             } catch (Exception e) {
                 Utils.closeQuietly(queue, "event queue");
@@ -1500,7 +1512,8 @@ public final class QuorumController implements Controller {
         long uncleanLeaderElectionCheckIntervalMs,
         String interBrokerListenerName,
         long controllerPerformanceSamplePeriodMs,
-        long controllerPerformanceAlwaysLogThresholdMs
+        long controllerPerformanceAlwaysLogThresholdMs,
+        ElectionDriver electionDriver
     ) {
         this.nonFatalFaultHandler = nonFatalFaultHandler;
         this.fatalFaultHandler = fatalFaultHandler;
@@ -1567,6 +1580,7 @@ public final class QuorumController implements Controller {
             setClusterControl(clusterControl).
             setCreateTopicPolicy(createTopicPolicy).
             setFeatureControl(featureControl).
+            setElectionDriver(electionDriver).
             build();
         this.scramControlManager = new ScramControlManager.Builder().
             setLogContext(logContext).
@@ -1857,6 +1871,17 @@ public final class QuorumController implements Controller {
         }
         return appendWriteEvent("electLeaders", context.deadlineNs(),
             () -> replicationControl.electLeaders(request));
+    }
+
+    @Override
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
+        if (topicIdPartitions.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return appendWriteEvent("performUncleanRecovery",
+                // TODO eventually change this to the configured limit
+                OptionalLong.of(TimeUnit.SECONDS.toNanos(30)),
+                () -> replicationControl.performUncleanRecovery(topicIdPartitions, store));
     }
 
     @Override

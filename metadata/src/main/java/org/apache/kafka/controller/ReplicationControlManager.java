@@ -79,6 +79,9 @@ import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AlterPartitionRequest;
 import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.controller.recoverymanager.ElectionDriver;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistration;
@@ -162,6 +165,7 @@ public class ReplicationControlManager {
         private ClusterControlManager clusterControl = null;
         private Optional<CreateTopicPolicy> createTopicPolicy = Optional.empty();
         private FeatureControlManager featureControl = null;
+        private ElectionDriver electionDriver;
 
         Builder setSnapshotRegistry(SnapshotRegistry snapshotRegistry) {
             this.snapshotRegistry = snapshotRegistry;
@@ -208,6 +212,11 @@ public class ReplicationControlManager {
             return this;
         }
 
+        public Builder setElectionDriver(ElectionDriver driver) {
+            this.electionDriver = driver;
+            return this;
+        }
+
         ReplicationControlManager build() {
             if (configurationControl == null) {
                 throw new IllegalStateException("Configuration control must be set before building");
@@ -227,7 +236,8 @@ public class ReplicationControlManager {
                 configurationControl,
                 clusterControl,
                 createTopicPolicy,
-                featureControl);
+                featureControl,
+                electionDriver);
         }
     }
 
@@ -378,6 +388,9 @@ public class ReplicationControlManager {
      */
     final KRaftClusterDescriber clusterDescriber = new KRaftClusterDescriber();
 
+    // TODO consider optional...
+    ElectionDriver electionDriver;
+
     private ReplicationControlManager(
         SnapshotRegistry snapshotRegistry,
         LogContext logContext,
@@ -387,7 +400,8 @@ public class ReplicationControlManager {
         ConfigurationControlManager configurationControl,
         ClusterControlManager clusterControl,
         Optional<CreateTopicPolicy> createTopicPolicy,
-        FeatureControlManager featureControl
+        FeatureControlManager featureControl,
+        ElectionDriver electionDriver
     ) {
         this.snapshotRegistry = snapshotRegistry;
         this.log = logContext.logger(ReplicationControlManager.class);
@@ -406,6 +420,7 @@ public class ReplicationControlManager {
         this.reassigningTopics = new TimelineHashMap<>(snapshotRegistry, 0);
         this.imbalancedPartitions = new TimelineHashSet<>(snapshotRegistry, 0);
         this.directoriesToPartitions = new TimelineHashMap<>(snapshotRegistry, 0);
+        this.electionDriver = electionDriver;
     }
 
     public void replay(TopicRecord record) {
@@ -1495,6 +1510,18 @@ public class ReplicationControlManager {
         }
     }
 
+    ControllerResult<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
+        List<UncleanRecoveryResult> results = new ArrayList<>(topicIdPartitions.size());
+        List<ApiMessageAndVersion> records = new ArrayList<>(topicIdPartitions.size());
+        for (TopicIdPartition topicIdPartition : topicIdPartitions) {
+            // TODO figure out how not to do this...
+            var topicName = getTopic(topicIdPartition.topicId()).name();
+            var electionResult = electLeader(topicName, topicIdPartition.partitionId(), ElectionType.UNCLEAN, records, store);
+            results.add(new UncleanRecoveryResult(electionResult, topicIdPartition));
+        }
+        return ControllerResult.of(records, results);
+    }
+
     ControllerResult<ElectLeadersResponseData> electLeaders(ElectLeadersRequestData request) {
         ElectionType electionType = electionType(request.electionType());
         List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
@@ -1551,8 +1578,19 @@ public class ReplicationControlManager {
         }
     }
 
-    ApiError electLeader(String topic, int partitionId, ElectionType electionType,
+    ApiError electLeader(String topic,
+                         int partitionId,
+                         ElectionType electionType,
                          List<ApiMessageAndVersion> records) {
+        return electLeader(topic, partitionId, electionType, records, null);
+    }
+
+    // TODO write a separate method for this... we're switching too and from uuid.. yuck.
+    ApiError electLeader(String topic,
+                         int partitionId,
+                         ElectionType electionType,
+                         List<ApiMessageAndVersion> records,
+                         LogLengthInfoStore store) {
         Uuid topicId = topicsByName.get(topic);
         if (topicId == null) {
             return new ApiError(UNKNOWN_TOPIC_OR_PARTITION,
@@ -1577,7 +1615,7 @@ public class ReplicationControlManager {
         if (electionType == ElectionType.UNCLEAN) {
             election = PartitionChangeBuilder.Election.UNCLEAN;
         }
-        Optional<ApiMessageAndVersion> record = new PartitionChangeBuilder(
+        var partitionChangeBuilder = new PartitionChangeBuilder(
             partition,
             topicId,
             partitionId,
@@ -1587,8 +1625,15 @@ public class ReplicationControlManager {
         )
             .setElection(election)
             .setEligibleLeaderReplicasEnabled(featureControl.isElrFeatureEnabled())
-            .setDefaultDirProvider(clusterDescriber)
-            .build();
+            .setDefaultDirProvider(clusterDescriber);
+
+        if (electionType == ElectionType.UNCLEAN && store != null) {
+            partitionChangeBuilder.setReplicaLogLengthMap(store.get(
+                    new TopicIdPartition(topicId, partitionId)
+            ));
+        }
+
+        Optional<ApiMessageAndVersion> record = partitionChangeBuilder.build();
         if (record.isEmpty()) {
             if (electionType == ElectionType.PREFERRED) {
                 return new ApiError(Errors.PREFERRED_LEADER_NOT_AVAILABLE);
@@ -1781,10 +1826,38 @@ public class ReplicationControlManager {
             int maxElections
     ) {
         Iterator<TopicIdPartition> iterator = brokersToIsrs.partitionsWithNoLeader();
+        List<ElectionDriver.TopicElectionInstruction> recoveryElections = new ArrayList<>();
+        Map<Integer, BrokerRegistration> brokerRegistrations = clusterControl.brokerRegistrations();
         while (iterator.hasNext() && records.size() < maxElections) {
             TopicIdPartition topicIdPartition = iterator.next();
             TopicControlInfo topic = topics.get(topicIdPartition.topicId());
             if (configurationControl.uncleanLeaderElectionEnabledForTopic(topic.name)) {
+                if (electionDriver != null) {
+                    int[] isr = topic.parts.get(topicIdPartition.partitionId()).isr;
+                    boolean allIsrAreFenced = true;
+                    for (int i = 0; i < isr.length; i++) {
+                        if (!brokerRegistrations.get(isr[i]).fenced()) {
+                            allIsrAreFenced = false;
+                            break;
+                        }
+                    }
+
+                    int[] elr = topic.parts.get(topicIdPartition.partitionId()).elr;
+                    boolean allElrAreFenced = true;
+                    for (int i = 0; i < elr.length && allIsrAreFenced; i++) {
+                        if (!brokerRegistrations.get(elr[i]).fenced()) {
+                            allElrAreFenced = true;
+                            break;
+                        }
+                    }
+                    if (allIsrAreFenced && allElrAreFenced) {
+                        int[] replicas = topic.parts.get(topicIdPartition.partitionId()).replicas;
+                        recoveryElections.add(new ElectionDriver.TopicElectionInstruction(topicIdPartition, replicas));
+                        log.trace("Topic {} will do unclean recovery", topicIdPartition);
+                        continue;
+                    }
+                }
+
                 ApiError result = electLeader(topic.name, topicIdPartition.partitionId(),
                         ElectionType.UNCLEAN, records);
                 if (result.error().equals(Errors.NONE)) {
@@ -1799,6 +1872,10 @@ public class ReplicationControlManager {
                                 "because unclean leader election is disabled for this topic.",
                         topic.name, topicIdPartition.partitionId());
             }
+        }
+
+        if (recoveryElections.size() > 0) {
+            electionDriver.startLeadershipElection(recoveryElections, clusterControl.brokerRegistrations(), 5000);
         }
     }
 
