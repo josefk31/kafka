@@ -168,6 +168,7 @@ public class ReplicationControlManager {
         private ClusterControlManager clusterControl = null;
         private Optional<CreateTopicPolicy> createTopicPolicy = Optional.empty();
         private FeatureControlManager featureControl = null;
+        private ElectionDriver electionDriver;
 
         Builder setSnapshotRegistry(SnapshotRegistry snapshotRegistry) {
             this.snapshotRegistry = snapshotRegistry;
@@ -214,6 +215,11 @@ public class ReplicationControlManager {
             return this;
         }
 
+        public Builder setElectionDriver(ElectionDriver driver) {
+            this.electionDriver = driver;
+            return this;
+        }
+
         ReplicationControlManager build() {
             if (configurationControl == null) {
                 throw new IllegalStateException("Configuration control must be set before building");
@@ -233,7 +239,8 @@ public class ReplicationControlManager {
                 configurationControl,
                 clusterControl,
                 createTopicPolicy,
-                featureControl);
+                featureControl,
+                electionDriver);
         }
     }
 
@@ -396,7 +403,8 @@ public class ReplicationControlManager {
         ConfigurationControlManager configurationControl,
         ClusterControlManager clusterControl,
         Optional<CreateTopicPolicy> createTopicPolicy,
-        FeatureControlManager featureControl
+        FeatureControlManager featureControl,
+        ElectionDriver electionDriver
     ) {
         this.snapshotRegistry = snapshotRegistry;
         this.log = logContext.logger(ReplicationControlManager.class);
@@ -415,6 +423,7 @@ public class ReplicationControlManager {
         this.reassigningTopics = new TimelineHashMap<>(snapshotRegistry, 0);
         this.imbalancedPartitions = new TimelineHashSet<>(snapshotRegistry, 0);
         this.directoriesToPartitions = new TimelineHashMap<>(snapshotRegistry, 0);
+        this.electionDriver = electionDriver;
     }
 
     public void replay(TopicRecord record) {
@@ -1792,16 +1801,25 @@ public class ReplicationControlManager {
         // TODO just get the topic control info rather than looking it up
         Iterator<TopicIdPartition> iterator = brokersToIsrs.partitionsWithNoLeader();
         List<ElectionDriver.TopicElectionInstruction> managedElections = new ArrayList<>();
+        // TODO dynamic configuration vs static configuration;
+        // do we want to allow folks to roll the cluster to restart this?
+        // for now lets just get it working locally
+        if (electionDriver != null) {
+            List<ElectionDriver.TopicElectionInstruction> driverManagedElections = new ArrayList<>();
+            while (iterator.hasNext()) {
+                TopicIdPartition topicIdPartition = iterator.next();
+                TopicControlInfo topic = topics.get(topicIdPartition.topicId());
+                int[] replicas = topic.parts.get(topicIdPartition.partitionId()).replicas;
+                driverManagedElections.add(
+                        new ElectionDriver.TopicElectionInstruction(topicIdPartition, replicas));
+            }
+            electionDriver.startLeadershipElection(driverManagedElections, clusterControl.brokerRegistrations(), 5000);
+            return;
+        }
         while (iterator.hasNext() && records.size() < maxElections) {
             TopicIdPartition topicIdPartition = iterator.next();
             TopicControlInfo topic = topics.get(topicIdPartition.topicId());
             if (configurationControl.uncleanLeaderElectionEnabledForTopic(topic.name)) {
-                if (configurationControl.uncleanRecoveryManagerEnabledForTopic(topic.name)) {
-                    var replicas = topic.parts.get(topicIdPartition.partitionId()).replicas;
-                    managedElections.add(
-                            new ElectionDriver.TopicElectionInstruction(topicIdPartition, replicas));
-                    continue;
-                }
                 ApiError result = electLeader(topic.name, topicIdPartition.partitionId(),
                         ElectionType.UNCLEAN, records);
                 if (result.error().equals(Errors.NONE)) {
@@ -1816,9 +1834,7 @@ public class ReplicationControlManager {
                                 "because unclean leader election is disabled for this topic.",
                         topic.name, topicIdPartition.partitionId());
             }
-        }
-        if (!managedElections.isEmpty()) {
-            electionDriver.startLeadershipElection(managedElections, clusterControl.brokerRegistrations(), 1000);
+
         }
     }
 

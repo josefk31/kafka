@@ -169,9 +169,6 @@ public class TopicConfig {
         "thread to trigger election periodically (default is 5 minutes). Please run `kafka-leader-election.sh` with `unclean` option " +
          "to trigger the unclean leader election immediately if needed.</p>";
 
-    public static final String UNCLEAN_RECOVERY_MANAGER_ENABLE_CONFIG = "unclean.election.manager.enable";
-    public static final String UNCLEAN_RECOVERY_MANAGER_ENABLE_CONFIG_DOC = "TODO Enables unclean recovery management... ";
-
     public static final String MIN_IN_SYNC_REPLICAS_CONFIG = "min.insync.replicas";
     public static final String MIN_IN_SYNC_REPLICAS_DOC = "When a producer sets acks to \"all\" (or \"-1\"), " +
         "this configuration specifies the minimum number of replicas that must acknowledge " +

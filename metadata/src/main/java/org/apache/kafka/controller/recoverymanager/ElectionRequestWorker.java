@@ -13,37 +13,12 @@ import org.apache.kafka.server.util.RequestAndCompletionHandler;
 import java.util.*;
 import java.util.concurrent.LinkedBlockingQueue;
 
-// TODO add a retry count...
-// TODO error handling
-class ElectionRequestWork implements RequestCompletionHandler {
-    public final AbstractRequest.Builder<?> builder;
-    public final Node node;
-
-    private final ElectionDriver driver;
-    private final OngoingElectionStateMachine ongoing;
-
-    public ElectionRequestWork(AbstractRequest.Builder<?> builder, ElectionDriver driver, OngoingElectionStateMachine ongoing, Node node) {
-        this.builder = builder;
-        this.driver = driver;
-        this.ongoing = ongoing;
-        this.node = node;
-    }
-
-    @Override
-    public void onComplete(ClientResponse response) {
-        // TODO error handling...
-        GetReplicaLogInfoResponse logInfoResponse = (GetReplicaLogInfoResponse) response.responseBody();
-        GetReplicaLogInfoResponseData responseData = logInfoResponse.data();
-        driver.addReplicaLogResponse(responseData, ongoing, node);
-    }
-}
-
 public class ElectionRequestWorker extends InterBrokerSendThread {
     // TODO make this an explicitly sized queue
     //      in fact we want to do this to all of our queues. They should be array blocking queues with
     //      finite size for efficiency and correctness.
     // TODO also check if there is an internal data structure for this queue...
-    private final LinkedBlockingQueue<ElectionRequestWork> queue;
+    private final LinkedBlockingQueue<Work> queue;
 
     public ElectionRequestWorker(String name,
                                  KafkaClient networkClient,
@@ -53,7 +28,7 @@ public class ElectionRequestWorker extends InterBrokerSendThread {
         this.queue = new LinkedBlockingQueue<>();
     }
 
-    public void enqueueWork(ElectionRequestWork work) {
+    public void enqueueWork(Work work) {
         queue.add(work);
     }
 
@@ -65,12 +40,38 @@ public class ElectionRequestWorker extends InterBrokerSendThread {
         //    walk through our queue and remove requests which are not needed
         // 2. or keep a special value in RequestAndCompletionHandler which allows us
         ArrayList<RequestAndCompletionHandler> requests = new ArrayList<>(this.queue.size());
-        Iterator<ElectionRequestWork> iterator = this.queue.iterator();
+        Iterator<Work> iterator = this.queue.iterator();
         while (iterator.hasNext()) {
-            ElectionRequestWork work = iterator.next();
+            Work work = iterator.next();
             requests.add(new RequestAndCompletionHandler(Time.SYSTEM.milliseconds(), work.node, work.builder, work));
             iterator.remove();
         }
         return requests;
     }
+
+    // TODO add a retry count...
+    // TODO error handling
+    static class Work implements RequestCompletionHandler {
+        public final AbstractRequest.Builder<?> builder;
+        public final Node node;
+
+        private final ElectionDriver driver;
+        private final OngoingElectionStateMachine ongoing;
+
+        public Work(AbstractRequest.Builder<?> builder, ElectionDriver driver, OngoingElectionStateMachine ongoing, Node node) {
+            this.builder = builder;
+            this.driver = driver;
+            this.ongoing = ongoing;
+            this.node = node;
+        }
+
+        @Override
+        public void onComplete(ClientResponse response) {
+            // TODO error handling...
+            GetReplicaLogInfoResponse logInfoResponse = (GetReplicaLogInfoResponse) response.responseBody();
+            GetReplicaLogInfoResponseData responseData = logInfoResponse.data();
+            driver.addReplicaLogResponse(responseData, ongoing, node);
+        }
+    }
+
 }

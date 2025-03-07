@@ -669,14 +669,6 @@ public class ConfigurationControlManager {
         return false;
     }
 
-    boolean uncleanRecoveryManagerEnabledForTopic(String topicName) {
-        String uncleanRecoveryManager = getTopicConfig(topicName, UNCLEAN_RECOVERY_MANAGER_ENABLE_CONFIG).value();
-        if (!uncleanRecoveryManager.isEmpty()) {
-            return Boolean.parseBoolean(uncleanRecoveryManager);
-        }
-        return false;
-    }
-
     Map<String, ConfigEntry> computeEffectiveTopicConfigs(Map<String, String> creationConfigs) {
         return configSchema.resolveEffectiveTopicConfigs(staticConfig, clusterConfig(),
             currentControllerConfig(), creationConfigs);

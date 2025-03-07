@@ -17,6 +17,7 @@
 
 package org.apache.kafka.controller;
 
+import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
 import org.apache.kafka.clients.admin.FeatureUpdate;
 import org.apache.kafka.common.Uuid;
@@ -93,6 +94,7 @@ import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
+import org.apache.kafka.controller.recoverymanager.ElectionDriver;
 import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
 import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.deferred.DeferredEvent;
@@ -231,6 +233,7 @@ public final class QuorumController implements Controller {
         private long delegationTokenExpiryCheckIntervalMs = TimeUnit.MINUTES.toMillis(5);
         private long uncleanLeaderElectionCheckIntervalMs = TimeUnit.MINUTES.toMillis(5);
         private String interBrokerListenerName = "PLAINTEXT";
+        private ElectionDriver electionDriver;
 
         public Builder(int nodeId, String clusterId) {
             this.nodeId = nodeId;
@@ -396,6 +399,11 @@ public final class QuorumController implements Controller {
             return this;
         }
 
+        public Builder setElectionDriver(ElectionDriver electionDriver) {
+            this.electionDriver = electionDriver;
+            return this;
+        }
+
         public QuorumController build() throws Exception {
             if (raftClient == null) {
                 throw new IllegalStateException("You must set a raft client.");
@@ -455,7 +463,8 @@ public final class QuorumController implements Controller {
                     uncleanLeaderElectionCheckIntervalMs,
                     interBrokerListenerName,
                     controllerPerformanceSamplePeriodMs,
-                    controllerPerformanceAlwaysLogThresholdMs
+                    controllerPerformanceAlwaysLogThresholdMs,
+                    electionDriver
                 );
             } catch (Exception e) {
                 Utils.closeQuietly(queue, "event queue");
@@ -1510,7 +1519,8 @@ public final class QuorumController implements Controller {
         long uncleanLeaderElectionCheckIntervalMs,
         String interBrokerListenerName,
         long controllerPerformanceSamplePeriodMs,
-        long controllerPerformanceAlwaysLogThresholdMs
+        long controllerPerformanceAlwaysLogThresholdMs,
+        ElectionDriver electionDriver
     ) {
         this.nonFatalFaultHandler = nonFatalFaultHandler;
         this.fatalFaultHandler = fatalFaultHandler;
@@ -1583,6 +1593,7 @@ public final class QuorumController implements Controller {
             setClusterControl(clusterControl).
             setCreateTopicPolicy(createTopicPolicy).
             setFeatureControl(featureControl).
+            setElectionDriver(electionDriver).
             build();
         this.scramControlManager = new ScramControlManager.Builder().
             setLogContext(logContext).
