@@ -19,8 +19,6 @@ package org.apache.kafka.controller;
 
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
 import org.apache.kafka.clients.admin.FeatureUpdate;
-import org.apache.kafka.common.ElectionType;
-import org.apache.kafka.common.TopicIdPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -95,7 +93,8 @@ import org.apache.kafka.common.utils.Utils;
 import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
-import org.apache.kafka.controller.recoverymanager.LogInfoStore;
+import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.deferred.DeferredEvent;
 import org.apache.kafka.deferred.DeferredEventQueue;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
@@ -120,6 +119,7 @@ import org.apache.kafka.server.authorizer.AclDeleteResult;
 import org.apache.kafka.server.common.ApiMessageAndVersion;
 import org.apache.kafka.server.common.KRaftVersion;
 import org.apache.kafka.server.common.MetadataVersion;
+import org.apache.kafka.server.common.TopicIdPartition;
 import org.apache.kafka.server.fault.FaultHandler;
 import org.apache.kafka.server.fault.FaultHandlerException;
 import org.apache.kafka.server.policy.AlterConfigPolicy;
@@ -1872,7 +1872,7 @@ public final class QuorumController implements Controller {
     }
 
     @Override
-    public CompletableFuture<ElectLeadersResponseData> performUncleanRecovery(
+    public CompletableFuture<ElectLeadersResponseData> electLeaders(
         ControllerRequestContext context,
         ElectLeadersRequestData request
     ) {
@@ -1886,11 +1886,13 @@ public final class QuorumController implements Controller {
     }
 
     @Override
-    public CompletableFuture<List<ApiError>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store) {
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, ElectionStateMachineStore store) {
         if (topicIdPartitions.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
         return appendWriteEvent("performUncleanRecovery",
+                // TODO eventually change this to the configured limit
+                OptionalLong.of(TimeUnit.SECONDS.toNanos(30)),
                 () -> replicationControl.performUncleanRecovery(topicIdPartitions, store));
     }
 

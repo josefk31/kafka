@@ -584,7 +584,7 @@ class ControllerApis(
     // So this method should actually ask our "driver" what to do if we are doing an "unclean" election.
     // There is a bunch of logic in ReplicationControlManager which needs to be reused.
     // Could make sense to factor a lot of that out
-    val future = controller.performUncleanRecovery(context, electLeadersRequest.data)
+    val future = controller.electLeaders(context, electLeadersRequest.data)
     future.handle[Unit] { (responseData, exception) =>
       if (exception != null) {
         requestHelper.sendResponseMaybeThrottle(request, throttleMs => {

@@ -21,8 +21,7 @@ import org.apache.kafka.common.DirectoryId;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.AlterPartitionRequestData.BrokerState;
 import org.apache.kafka.common.metadata.PartitionChangeRecord;
-import org.apache.kafka.controller.recoverymanager.ElectionStateMachine;
-import org.apache.kafka.controller.recoverymanager.LogInfoStore;
+import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
 import org.apache.kafka.metadata.LeaderRecoveryState;
 import org.apache.kafka.metadata.PartitionRegistration;
 import org.apache.kafka.metadata.Replicas;
@@ -97,7 +96,7 @@ public class PartitionChangeBuilder {
     private List<Integer> targetElr;
     private List<Integer> targetLastKnownElr;
     private List<Integer> uncleanShutdownReplicas;
-    private Map<Integer, LogInfoStore.EpochOffset> replicaLogLengthMap;
+    private Map<Integer, ElectionStateMachineStore.EpochOffset> replicaLogLengthMap;
     private Election election = Election.ONLINE;
     private LeaderRecoveryState targetLeaderRecoveryState;
     private boolean eligibleLeaderReplicasEnabled;
@@ -165,7 +164,7 @@ public class PartitionChangeBuilder {
         return this;
     }
 
-    public PartitionChangeBuilder setReplicaLogLengthMap(Map<Integer, LogInfoStore.EpochOffset> replicaLogLengthMap) {
+    public PartitionChangeBuilder setReplicaLogLengthMap(Map<Integer, ElectionStateMachineStore.EpochOffset> replicaLogLengthMap) {
         this.replicaLogLengthMap = replicaLogLengthMap;
         return this;
     }
@@ -296,8 +295,8 @@ public class PartitionChangeBuilder {
                         .filter(isAcceptableLeader::test)
                         .max((a, b) ->
                             replicaLogLengthMap
-                                    .getOrDefault(a, LogInfoStore.EpochOffset.MIN)
-                                    .compareTo(replicaLogLengthMap.getOrDefault(b, LogInfoStore.EpochOffset.MIN)));
+                                    .getOrDefault(a, ElectionStateMachineStore.EpochOffset.MIN)
+                                    .compareTo(replicaLogLengthMap.getOrDefault(b, ElectionStateMachineStore.EpochOffset.MIN)));
             }
             if (uncleanLeader.isPresent()) {
                 return new ElectionResult(uncleanLeader.get(), true);

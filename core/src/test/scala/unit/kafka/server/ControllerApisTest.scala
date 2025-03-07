@@ -1066,7 +1066,7 @@ class ControllerApisTest {
   }
 
   @Test
-  def testPerformUncleanRecoveryAuthorization(): Unit = {
+  def testElectLeadersAuthorization(): Unit = {
     val authorizer = mock(classOf[Authorizer])
     val controller = mock(classOf[Controller])
     controllerApis = createControllerApis(Some(authorizer), controller)
@@ -1089,7 +1089,7 @@ class ControllerApisTest {
   }
 
   @Test
-  def testPerformUncleanRecoveryHandledByController(): Unit = {
+  def testElectLeadersHandledByController(): Unit = {
     val controller = mock(classOf[Controller])
     controllerApis = createControllerApis(None, controller)
     val request = new ElectLeadersRequest.Builder(
@@ -1101,7 +1101,7 @@ class ControllerApisTest {
     val responseData = new ElectLeadersResponseData()
       .setErrorCode(Errors.NOT_CONTROLLER.code)
 
-    when(controller.performUncleanRecovery(any[ControllerRequestContext],
+    when(controller.electLeaders(any[ControllerRequestContext],
       ArgumentMatchers.eq(request.data)
     )).thenReturn(CompletableFuture.completedFuture(responseData))
 

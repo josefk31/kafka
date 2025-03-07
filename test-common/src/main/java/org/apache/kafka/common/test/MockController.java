@@ -18,7 +18,6 @@
 package org.apache.kafka.common.test;
 
 import org.apache.kafka.clients.admin.AlterConfigOp;
-import org.apache.kafka.common.TopicIdPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -63,12 +62,14 @@ import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.controller.Controller;
 import org.apache.kafka.controller.ControllerRequestContext;
 import org.apache.kafka.controller.ResultOrError;
-import org.apache.kafka.controller.recoverymanager.LogInfoStore;
+import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
 import org.apache.kafka.metadata.FinalizedControllerFeatures;
 import org.apache.kafka.server.authorizer.AclCreateResult;
 import org.apache.kafka.server.authorizer.AclDeleteResult;
+import org.apache.kafka.server.common.TopicIdPartition;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -340,7 +341,7 @@ public class MockController implements Controller {
     }
 
     @Override
-    public CompletableFuture<ElectLeadersResponseData> performUncleanRecovery(
+    public CompletableFuture<ElectLeadersResponseData> electLeaders(
         ControllerRequestContext context,
         ElectLeadersRequestData request
     ) {
@@ -348,8 +349,8 @@ public class MockController implements Controller {
     }
 
     @Override
-    public CompletableFuture<Void> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogInfoStore store) {
-        return null;
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, ElectionStateMachineStore store) {
+        throw new UnsupportedOperationException();
     }
 
     @Override

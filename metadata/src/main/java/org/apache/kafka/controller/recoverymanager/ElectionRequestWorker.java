@@ -13,14 +13,16 @@ import org.apache.kafka.server.util.RequestAndCompletionHandler;
 import java.util.*;
 import java.util.concurrent.LinkedBlockingQueue;
 
+// TODO add a retry count...
+// TODO error handling
 class ElectionRequestWork implements RequestCompletionHandler {
     public final AbstractRequest.Builder<?> builder;
     public final Node node;
 
     private final ElectionDriver driver;
-    private final OngoingElectionRequest ongoing;
+    private final OngoingElectionStateMachine ongoing;
 
-    public ElectionRequestWork(AbstractRequest.Builder<?> builder, ElectionDriver driver, OngoingElectionRequest ongoing, Node node) {
+    public ElectionRequestWork(AbstractRequest.Builder<?> builder, ElectionDriver driver, OngoingElectionStateMachine ongoing, Node node) {
         this.builder = builder;
         this.driver = driver;
         this.ongoing = ongoing;
@@ -29,9 +31,10 @@ class ElectionRequestWork implements RequestCompletionHandler {
 
     @Override
     public void onComplete(ClientResponse response) {
+        // TODO error handling...
         GetReplicaLogInfoResponse logInfoResponse = (GetReplicaLogInfoResponse) response.responseBody();
         GetReplicaLogInfoResponseData responseData = logInfoResponse.data();
-        driver.appendReplicaLogResponse(responseData, ongoing, node);
+        driver.addReplicaLogResponse(responseData, ongoing, node);
     }
 }
 
@@ -39,7 +42,8 @@ public class ElectionRequestWorker extends InterBrokerSendThread {
     // TODO make this an explicitly sized queue
     //      in fact we want to do this to all of our queues. They should be array blocking queues with
     //      finite size for efficiency and correctness.
-    private LinkedBlockingQueue<ElectionRequestWork> queue;
+    // TODO also check if there is an internal data structure for this queue...
+    private final LinkedBlockingQueue<ElectionRequestWork> queue;
 
     public ElectionRequestWorker(String name,
                                  KafkaClient networkClient,

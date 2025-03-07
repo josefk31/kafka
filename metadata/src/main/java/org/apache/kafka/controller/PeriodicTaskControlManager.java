@@ -21,6 +21,8 @@ import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.controller.errors.PeriodicControlTaskException;
 
+import org.apache.kafka.queue.EventQueue;
+import org.apache.kafka.queue.KafkaEventQueue;
 import org.slf4j.Logger;
 
 import java.util.Arrays;

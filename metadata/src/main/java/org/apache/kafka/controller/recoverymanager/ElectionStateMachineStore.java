@@ -1,15 +1,16 @@
 package org.apache.kafka.controller.recoverymanager;
 
+import org.apache.kafka.common.message.GetReplicaLogInfoResponseData;
 import org.apache.kafka.server.common.TopicIdPartition;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 
-public class LogInfoStore {
+// TODO figure out if we can find a more friendly form for this class
+public class ElectionStateMachineStore {
     private final Map<TopicIdPartition, Map<Integer, EpochOffset>> store;
 
-    public LogInfoStore() {
+    public ElectionStateMachineStore() {
         this.store = new HashMap<>();
     }
 
@@ -23,31 +24,35 @@ public class LogInfoStore {
         }
     }
 
-    public Optional<EpochOffset> get(TopicIdPartition topicIdPartition, int replica) {
-        if (store.containsKey(topicIdPartition)) {
-            return Optional.of(store.get(topicIdPartition).get(replica));
-        }
-        return Optional.empty();
+    public Map<Integer, EpochOffset> get(TopicIdPartition tp) {
+        return store.get(tp);
     }
 
     public static class EpochOffset implements Comparable<EpochOffset> {
         public final int epoch;
-        public final int offset;
+        public final long offset;
 
-        EpochOffset(int epoch, int offset) {
+        EpochOffset(int epoch, long offset) {
             this.epoch = epoch;
             this.offset = offset;
         }
 
-        public static final EpochOffset MIN = new EpochOffset(Integer.MIN_VALUE, Integer.MIN_VALUE);
-        public static final EpochOffset MAX = new EpochOffset(Integer.MAX_VALUE, Integer.MAX_VALUE);
+        public static final EpochOffset MIN = new EpochOffset(Integer.MIN_VALUE, Long.MIN_VALUE);
+        public static final EpochOffset MAX = new EpochOffset(Integer.MAX_VALUE, Long.MAX_VALUE);
 
         @Override
         public int compareTo(EpochOffset o) {
             if (this.epoch == o.epoch) {
-                return this.offset - o.offset;
+                if (this.offset == o.offset) {
+                    return 0;
+                }
+                return this.offset < o.offset ? -1 : 1;
             }
             return this.epoch - o.epoch;
+        }
+
+        public static EpochOffset from(GetReplicaLogInfoResponseData.PartitionLogInfo info) {
+            return new EpochOffset(info.lastWrittenLeaderEpoch(), info.logEndOffset());
         }
     }
 }
