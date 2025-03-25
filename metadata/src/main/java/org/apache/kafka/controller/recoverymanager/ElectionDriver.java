@@ -2,11 +2,6 @@ package org.apache.kafka.controller.recoverymanager;
 
 import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.common.Node;
-import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.message.GetReplicaLogInfoRequestData;
-import org.apache.kafka.common.message.GetReplicaLogInfoResponseData;
-import org.apache.kafka.common.requests.AbstractRequest;
-import org.apache.kafka.common.requests.GetReplicaLogInfoRequest;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.controller.Controller;
@@ -14,56 +9,28 @@ import org.apache.kafka.metadata.BrokerRegistration;
 import org.apache.kafka.queue.EventQueue;
 import org.apache.kafka.queue.KafkaEventQueue;
 import org.apache.kafka.server.common.TopicIdPartition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-// TODO don't use wildcard import...
-import java.util.*;
+import java.util.ArrayList;
 import java.util.List;
-
-// ElectionRequest -> TopicPartiton -> Replica -> Log
-// TODO potentially make this object at a higher level
-class RequestAmoritizer {
-    private Map<Uuid, List<Integer>> partitionForTopic;
-
-    public RequestAmoritizer() {
-        partitionForTopic = new HashMap<>();
-    }
-
-    public void addTopic(Node node, TopicIdPartition tp) {
-        partitionForTopic.putIfAbsent(tp.topicId(), Collections.emptyList());
-        partitionForTopic.get(tp.topicId()).add(tp.partitionId());
-
-    }
-
-    public GetReplicaLogInfoRequestData build() {
-        GetReplicaLogInfoRequestData requestData = new GetReplicaLogInfoRequestData();
-        // TODO why broker ID again??
-        for (Map.Entry<Uuid, List<Integer>> entry : partitionForTopic.entrySet()) {
-            var topicPartitions = new GetReplicaLogInfoRequestData.TopicPartitions();
-            requestData.topicPartitions().add(new GetReplicaLogInfoRequestData.TopicPartitions()
-                    .setTopicId(entry.getKey())
-                    .setPartitions(entry.getValue()));
-        }
-        return requestData;
-    }
-}
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class ElectionDriver implements AutoCloseable {
-    private ElectionRequestWorker electionRequestWorker;
-    private List<OngoingElectionStateMachine> ongoingElections;
-    private KafkaEventQueue queue;
-    private Time time;
-    private Controller controller;
-    private LogContext logContext;
-    // TODO do we need a long or something for this?
-    // TODO should this be atomic? (IMO no).
+    private static final Logger log = LoggerFactory.getLogger(ElectionDriver.class);
+    private final UncleanRecoveryRequestThread uncleanRecoveryRequestThread;
+    private final KafkaEventQueue queue;
+    private final Time time;
+    private final Controller controller;
+    private final LogContext logContext;
     private int electionId;
 
     public ElectionDriver(int nodeId,
-                          ElectionRequestWorker electionRequestWorker,
+                          UncleanRecoveryRequestThread uncleanRecoveryRequestThread,
                           Controller controller,
                           Time time) {
-        this.electionRequestWorker = electionRequestWorker;
-        this.ongoingElections = new LinkedList<>();
+        this.uncleanRecoveryRequestThread = uncleanRecoveryRequestThread;
         this.time = time;
         this.logContext = new LogContext(String.format("[ElectionDriver id=%d] ", nodeId));
         this.queue = new KafkaEventQueue(time, logContext, String.format("election-driver-%d ", nodeId));
@@ -98,53 +65,66 @@ public class ElectionDriver implements AutoCloseable {
 
         public ElectionDriver build() {
             String electionWorkerName = String.format("election-worker-%d", nodeId);
-            ElectionRequestWorker worker = new ElectionRequestWorker(electionWorkerName, kafkaClient,1000, this.time);
+            UncleanRecoveryRequestThread worker = new UncleanRecoveryRequestThread(electionWorkerName, kafkaClient,1000, this.time);
             return new ElectionDriver(this.nodeId, worker, this.controller, this.time);
         }
     }
 
-    // TODO are there other types of elections?
-    //      can someone cancel an ongoing election?
-    private class ReplicaLogRequestDone implements EventQueue.Event {
-        final public GetReplicaLogInfoResponseData responseData;
-        final public OngoingElectionStateMachine ongoing;
-        final public Node node;
+    void processReplicaLogResponse(ElectionStateMachine machine, int brokerId, RecoveryLogRequestWork.Result result) {
+        // A request could be completed after gathering has been completed;
+        // in which case no further work is needed...
+        if (machine.completedGathering()) {
+            return;
+        }
+        // May not work; we should explicitly check for errors
+        if (result.succeeded) {
+            this.queue.append(() -> {
+                // we will always pass through non-null response data
+                assert result.responseData != null;
+                machine.updateElectionStates(brokerId, result.responseData);
+                machine.finishedRequestsForBroker();
+                if (machine.completedGathering()) {
+                    controller
+                            .performUncleanRecovery(machine.topics().stream().toList(), machine.store())
+                            .handle((results, error) -> {
+                                queue.append(new PartitionWritten(machine, results));
+                                return results;
+                            });
+                }
+            });
+        } else {
+            if (result.responseData != null) {
+                this.queue.append(() -> {
+                    machine.updateElectionStates(brokerId, result.responseData);
+                });
+            }
+            this.queue.scheduleDeferred(
+                    String.format("retry-broker=%d-request-%d", brokerId, electionId),
+                    new EventQueue.DeadlineFunction(result.backoffMs),
+                    () -> uncleanRecoveryRequestThread.enqueueWork(result.nextRequest));
+        }
+    }
 
-        public ReplicaLogRequestDone(GetReplicaLogInfoResponseData responseData, OngoingElectionStateMachine ongoing, Node node) {
-            this.responseData = responseData;
-            this.ongoing = ongoing;
-            this.node = node;
+    private class SwitchToControllerElectionEvent implements EventQueue.Event {
+        private final ElectionStateMachine machine;
+
+        SwitchToControllerElectionEvent(ElectionStateMachine machine) {
+            this.machine = machine;
         }
 
         @Override
         public void run() throws Exception {
-            // TODO update election states when a response is received
-            ongoing.updateElectionStates(node, responseData);
-        }
-    }
+            machine.stopGathering();
+            if (machine.hasCompletedAllElections()) {
 
-    public void addReplicaLogResponse(GetReplicaLogInfoResponseData responseData, OngoingElectionStateMachine ongoingElectionStateMachine, Node node) {
-        this.queue.append(new ReplicaLogRequestDone(responseData, ongoingElectionStateMachine, node));
-
-    }
-
-    private class PeriodicEvent implements EventQueue.Event {
-        private final OngoingElectionStateMachine ongoing;
-
-        PeriodicEvent(OngoingElectionStateMachine ongoing) {
-            this.ongoing = ongoing;
-        }
-
-        @Override
-        public void run() throws Exception {
-            this.ongoing.finishGathering();
+            }
             controller
-                    .performUncleanRecovery(ongoing.topics().stream().toList(), ongoing.store())
+                    .performUncleanRecovery(machine.topics().stream().toList(), machine.store())
                     .handle((results, error) -> {
-                        // TODO error handling...
-                        // at this point we may wish to retry or we may wish to just cancel
-                        // the entire election...
-                        queue.append(new PartitionWritten(ongoing, results));
+                        if (error != null) {
+                            log.warn("Unclean recovery resulted in error", error);
+                        }
+                        queue.append(new PartitionWritten(machine, results));
                         return results;
                     });
         }
@@ -153,50 +133,46 @@ public class ElectionDriver implements AutoCloseable {
     private class BeginElection implements EventQueue.Event {
         private final List<TopicElectionInstruction> topicsAndReplicas;
         private final Map<Integer, BrokerRegistration> brokerRegistrations;
-        private final long deadline;
+        private final long deadlineMs;
         private final ElectionDriver driver;
 
-        public BeginElection(List<TopicElectionInstruction> topicsAndReplicas, Map<Integer, BrokerRegistration> brokerRegistrations, long deadline, ElectionDriver driver) {
+        public BeginElection(List<TopicElectionInstruction> topicsAndReplicas,
+                             Map<Integer, BrokerRegistration> brokerRegistrations,
+                             long deadlineMs,
+                             ElectionDriver driver) {
             this.topicsAndReplicas = topicsAndReplicas;
             this.brokerRegistrations = brokerRegistrations;
-            this.deadline = deadline;
+            this.deadlineMs = deadlineMs;
             this.driver = driver;
         }
 
         @Override
         public void run() throws Exception {
             List<TopicIdPartition> topicIdPartitions = new ArrayList<>();
-            Map<Node, RequestAmoritizer> requestBuilders = new HashMap<>();
+            LogRequestsAmortizer amoritizer = new LogRequestsAmortizer();
             for (TopicElectionInstruction tr: topicsAndReplicas) {
                 for (int replica: tr.replicas) {
                     BrokerRegistration reg = brokerRegistrations.get(replica);
-                    // TODO figure out how to get the listener configuration in the right place
-                    Node node = reg.node("").get();
-                    RequestAmoritizer rb = null;
-                    if (requestBuilders.containsKey(node)) {
-                        rb = requestBuilders.get(node);
-                    } else {
-                        rb = new RequestAmoritizer();
-                        requestBuilders.put(node, rb);
+                    if (reg.fenced()) {
+                        continue;
                     }
-                    rb.addTopic(node, tr.topicIdPartition);
+                    // Should be impossible
+                    assert !reg.listeners().isEmpty();
+                    String listenerName = reg.listeners().keySet().iterator().next();
+                    Node node = reg.node(listenerName).get();
+                    amoritizer.setNode(replica, node);
+                    amoritizer.addTopic(replica, tr.topicIdPartition);
                 }
             }
-
-            long switchPointTime = time.hiResClockMs() + deadline;
-            OngoingElectionStateMachine ongoingElectionStateMachine = new OngoingElectionStateMachine(topicIdPartitions);
-            requestBuilders.entrySet().forEach(entry -> {
-                Node node = entry.getKey();
-                GetReplicaLogInfoRequestData requestData = entry.getValue().build().setBrokerId(node.id());
-                AbstractRequest.Builder<?> requestBuilder = new GetReplicaLogInfoRequest.Builder(requestData);
-                ElectionRequestWorker.Work work = new ElectionRequestWorker.Work(requestBuilder, driver, ongoingElectionStateMachine, entry.getKey());
-                electionRequestWorker.enqueueWork(work);
-            });
-            ongoingElections.add(ongoingElectionStateMachine);
+            long switchPointTimeMs = time.hiResClockMs() + deadlineMs;
+            ElectionStateMachine newMachine = new ElectionStateMachine(topicIdPartitions);
+            List<RecoveryLogRequestWork> requests = amoritizer.buildAll(driver, newMachine);
+            newMachine.setBrokerGatheringCount(requests.size());
+            requests.forEach(uncleanRecoveryRequestThread::enqueueWork);
             queue.scheduleDeferred(
                     String.format("periodic-event-%d", electionId),
-                    deadLine -> OptionalLong.of(deadLine.orElseGet(() -> switchPointTime)),
-                    new PeriodicEvent(ongoingElectionStateMachine));
+                    new EventQueue.EarliestDeadlineFunction(TimeUnit.MILLISECONDS.toNanos(switchPointTimeMs)),
+                    new SwitchToControllerElectionEvent(newMachine));
             electionId += 1;
         }
     }
@@ -212,30 +188,23 @@ public class ElectionDriver implements AutoCloseable {
     }
 
     public void startLeadershipElection(List<TopicElectionInstruction> topicsAndReplicas,
-                                        Map<Integer, BrokerRegistration> brokerRegistration,
+                                        Map<Integer, BrokerRegistration> brokerRegistrations,
                                         long deadlineToStopGatheringMs) {
-        queue.append(new BeginElection(topicsAndReplicas, brokerRegistration, deadlineToStopGatheringMs,this));
+        queue.append(new BeginElection(topicsAndReplicas, brokerRegistrations, deadlineToStopGatheringMs,this));
     }
 
-    class PartitionWritten implements EventQueue.Event {
-        private final OngoingElectionStateMachine ongoing;
+    private class PartitionWritten implements EventQueue.Event {
+        private final ElectionStateMachine machine;
         private final List<UncleanRecoveryResult> results;
 
-        PartitionWritten(OngoingElectionStateMachine ongoing, List<UncleanRecoveryResult> results) {
-            this.ongoing = ongoing;
+        PartitionWritten(ElectionStateMachine machine, List<UncleanRecoveryResult> results) {
+            this.machine = machine;
             this.results = results;
         }
 
         @Override
         public void run() throws Exception {
-            results.forEach(ongoing::completeElection);
-            Iterator<OngoingElectionStateMachine> iter = ongoingElections.iterator();
-            while (iter.hasNext()) {
-                OngoingElectionStateMachine o = iter.next();
-                if (ongoing == o) {
-                    iter.remove();
-                }
-            }
+            machine.completeElection(results);
         }
     }
 
