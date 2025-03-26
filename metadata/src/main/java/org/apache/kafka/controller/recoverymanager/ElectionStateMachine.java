@@ -16,14 +16,14 @@ public class ElectionStateMachine {
         FAILED,
     }
 
-    private final ElectionStateMachineStore store;
+    private final LogLengthInfoStore store;
     private final Map<TopicIdPartition, ElectionResultState> topicElectionResults;
     private int brokerGatheringCount = 0;
     private boolean gatheringStopped = false;
     private boolean hasCompletedAllElections = false;
 
     ElectionStateMachine(List<TopicIdPartition> topicIdPartitions) {
-        this.store = new ElectionStateMachineStore();
+        this.store = new LogLengthInfoStore();
         this.topicElectionResults = new HashMap<>();
         for (TopicIdPartition topicIdPartition : topicIdPartitions) {
             topicElectionResults.put(topicIdPartition, ElectionResultState.ONGOING);
@@ -35,7 +35,7 @@ public class ElectionStateMachine {
             for (GetReplicaLogInfoResponseData.PartitionLogInfo info: tp.partitionLogInfo()) {
                 if (info.errorCode() == Errors.NONE.code()) {
                     TopicIdPartition tip = new TopicIdPartition(tp.topicId(), info.partition());
-                    store.add(tip, brokerId, ElectionStateMachineStore.EpochOffset.from(info));
+                    store.add(tip, brokerId, LogLengthInfoStore.EpochOffset.from(info));
                 }
             }
         }
@@ -60,7 +60,7 @@ public class ElectionStateMachine {
         this.brokerGatheringCount = brokerGatheringCount;
     }
 
-    public ElectionStateMachineStore store() {
+    public LogLengthInfoStore store() {
         return store;
     }
 

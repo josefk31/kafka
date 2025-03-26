@@ -7,10 +7,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 // TODO figure out if we can find a more friendly form for this class
-public class ElectionStateMachineStore {
+public class LogLengthInfoStore {
     private final Map<TopicIdPartition, Map<Integer, EpochOffset>> store;
 
-    public ElectionStateMachineStore() {
+    public LogLengthInfoStore() {
         this.store = new HashMap<>();
     }
 

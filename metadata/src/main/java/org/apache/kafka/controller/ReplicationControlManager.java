@@ -81,7 +81,7 @@ import org.apache.kafka.common.requests.AlterPartitionRequest;
 import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.common.utils.LogContext;
 import org.apache.kafka.controller.recoverymanager.ElectionDriver;
-import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
 import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.image.writer.ImageWriterOptions;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
@@ -391,7 +391,7 @@ public class ReplicationControlManager {
      */
     final KRaftClusterDescriber clusterDescriber = new KRaftClusterDescriber();
 
-    // TODO Initialize this
+    // TODO consider optional...
     ElectionDriver electionDriver;
 
     private ReplicationControlManager(
@@ -1483,7 +1483,7 @@ public class ReplicationControlManager {
         }
     }
 
-    ControllerResult<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, ElectionStateMachineStore store) {
+    ControllerResult<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
         List<UncleanRecoveryResult> results = new ArrayList<>(topicIdPartitions.size());
         List<ApiMessageAndVersion> records = new ArrayList<>(topicIdPartitions.size());
         for (TopicIdPartition topicIdPartition : topicIdPartitions) {
@@ -1563,7 +1563,7 @@ public class ReplicationControlManager {
                          int partitionId,
                          ElectionType electionType,
                          List<ApiMessageAndVersion> records,
-                         ElectionStateMachineStore store) {
+                         LogLengthInfoStore store) {
         Uuid topicId = topicsByName.get(topic);
         if (topicId == null) {
             return new ApiError(UNKNOWN_TOPIC_OR_PARTITION,
@@ -1798,28 +1798,39 @@ public class ReplicationControlManager {
             List<ApiMessageAndVersion> records,
             int maxElections
     ) {
-        // TODO just get the topic control info rather than looking it up
         Iterator<TopicIdPartition> iterator = brokersToIsrs.partitionsWithNoLeader();
-        List<ElectionDriver.TopicElectionInstruction> managedElections = new ArrayList<>();
-        // TODO dynamic configuration vs static configuration;
-        // do we want to allow folks to roll the cluster to restart this?
-        // for now lets just get it working locally
-        if (electionDriver != null) {
-            List<ElectionDriver.TopicElectionInstruction> driverManagedElections = new ArrayList<>();
-            while (iterator.hasNext()) {
-                TopicIdPartition topicIdPartition = iterator.next();
-                TopicControlInfo topic = topics.get(topicIdPartition.topicId());
-                int[] replicas = topic.parts.get(topicIdPartition.partitionId()).replicas;
-                driverManagedElections.add(
-                        new ElectionDriver.TopicElectionInstruction(topicIdPartition, replicas));
-            }
-            electionDriver.startLeadershipElection(driverManagedElections, clusterControl.brokerRegistrations(), 5000);
-            return;
-        }
+        List<ElectionDriver.TopicElectionInstruction> recoveryElections = new ArrayList<>();
+        Map<Integer, BrokerRegistration> brokerRegistrations = clusterControl.brokerRegistrations();
         while (iterator.hasNext() && records.size() < maxElections) {
             TopicIdPartition topicIdPartition = iterator.next();
             TopicControlInfo topic = topics.get(topicIdPartition.topicId());
             if (configurationControl.uncleanLeaderElectionEnabledForTopic(topic.name)) {
+                if (electionDriver != null) {
+                    int[] isr = topic.parts.get(topicIdPartition.partitionId()).isr;
+                    boolean allIsrAreFenced = true;
+                    for (int i = 0; i < isr.length; i++) {
+                        if (!brokerRegistrations.get(isr[i]).fenced()) {
+                            allIsrAreFenced = false;
+                            break;
+                        }
+                    }
+
+                    int[] elr = topic.parts.get(topicIdPartition.partitionId()).elr;
+                    boolean allElrAreFenced = true;
+                    for (int i = 0; i < elr.length && allIsrAreFenced; i++) {
+                        if (!brokerRegistrations.get(elr[i]).fenced()) {
+                            allElrAreFenced = true;
+                            break;
+                        }
+                    }
+                    if (allIsrAreFenced && allElrAreFenced) {
+                        int[] replicas = topic.parts.get(topicIdPartition.partitionId()).replicas;
+                        recoveryElections.add(new ElectionDriver.TopicElectionInstruction(topicIdPartition, replicas));
+                        log.trace("Topic {} will do unclean recovery", topicIdPartition);
+                        continue;
+                    }
+                }
+
                 ApiError result = electLeader(topic.name, topicIdPartition.partitionId(),
                         ElectionType.UNCLEAN, records);
                 if (result.error().equals(Errors.NONE)) {
@@ -1834,7 +1845,10 @@ public class ReplicationControlManager {
                                 "because unclean leader election is disabled for this topic.",
                         topic.name, topicIdPartition.partitionId());
             }
+        }
 
+        if (recoveryElections.size() > 0) {
+            electionDriver.startLeadershipElection(recoveryElections, clusterControl.brokerRegistrations(), 5000);
         }
     }
 

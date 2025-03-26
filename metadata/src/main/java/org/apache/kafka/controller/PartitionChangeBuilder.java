@@ -21,7 +21,7 @@ import org.apache.kafka.common.DirectoryId;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.message.AlterPartitionRequestData.BrokerState;
 import org.apache.kafka.common.metadata.PartitionChangeRecord;
-import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
 import org.apache.kafka.metadata.LeaderRecoveryState;
 import org.apache.kafka.metadata.PartitionRegistration;
 import org.apache.kafka.metadata.Replicas;
@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.function.IntPredicate;
 import java.util.stream.Collectors;
 
@@ -96,7 +97,7 @@ public class PartitionChangeBuilder {
     private List<Integer> targetElr;
     private List<Integer> targetLastKnownElr;
     private List<Integer> uncleanShutdownReplicas;
-    private Map<Integer, ElectionStateMachineStore.EpochOffset> replicaLogLengthMap;
+    private Map<Integer, LogLengthInfoStore.EpochOffset> replicaLogLengthMap;
     private Election election = Election.ONLINE;
     private LeaderRecoveryState targetLeaderRecoveryState;
     private boolean eligibleLeaderReplicasEnabled;
@@ -164,7 +165,7 @@ public class PartitionChangeBuilder {
         return this;
     }
 
-    public PartitionChangeBuilder setReplicaLogLengthMap(Map<Integer, ElectionStateMachineStore.EpochOffset> replicaLogLengthMap) {
+    public PartitionChangeBuilder setReplicaLogLengthMap(Map<Integer, LogLengthInfoStore.EpochOffset> replicaLogLengthMap) {
         this.replicaLogLengthMap = replicaLogLengthMap;
         return this;
     }
@@ -229,6 +230,9 @@ public class PartitionChangeBuilder {
         if (election == Election.PREFERRED) {
             return electPreferredLeader();
         }
+        if (election == Election.UNCLEAN && replicaLogLengthMap != null) {
+            return electLeaderWithLongestLogLength();
+        }
 
         return electAnyLeader();
     }
@@ -262,18 +266,15 @@ public class PartitionChangeBuilder {
         return new ElectionResult(NO_LEADER, false);
     }
 
-    /**
-     * Assumes that the election type is either Election.ONLINE or Election.UNCLEAN
-     */
-    private ElectionResult electAnyLeader() {
+    private ElectionResult electLeaderWithStrategy(Supplier<Optional<Integer>> strategy) {
         if (isValidNewLeader(partition.leader)) {
             // Don't consider a new leader since the current leader meets all the constraints
             return new ElectionResult(partition.leader, false);
         }
 
         Optional<Integer> onlineLeader = targetReplicas.stream()
-            .filter(this::isValidNewLeader)
-            .findFirst();
+                .filter(this::isValidNewLeader)
+                .findFirst();
         if (onlineLeader.isPresent()) {
             return new ElectionResult(onlineLeader.get(), false);
         }
@@ -282,28 +283,31 @@ public class PartitionChangeBuilder {
             return new ElectionResult(partition.lastKnownElr[0], true);
         }
 
-        if (election == Election.UNCLEAN) {
-            // Attempt unclean leader election
-            Optional<Integer> uncleanLeader;
-            if (replicaLogLengthMap == null) {
-                uncleanLeader = targetReplicas.stream()
-                        .filter(isAcceptableLeader::test)
-                        .findFirst();
-            } else {
-                // In this case, we have received some logs to help assist with investigation
-                uncleanLeader = targetReplicas.stream()
-                        .filter(isAcceptableLeader::test)
-                        .max((a, b) ->
-                            replicaLogLengthMap
-                                    .getOrDefault(a, ElectionStateMachineStore.EpochOffset.MIN)
-                                    .compareTo(replicaLogLengthMap.getOrDefault(b, ElectionStateMachineStore.EpochOffset.MIN)));
-            }
-            if (uncleanLeader.isPresent()) {
-                return new ElectionResult(uncleanLeader.get(), true);
-            }
+        Optional<Integer> newLeader = strategy.get();
+        if (newLeader.isPresent()) {
+            return new ElectionResult(newLeader.get(), true);
         }
-
         return new ElectionResult(NO_LEADER, false);
+    }
+
+    /**
+     * Elects a leader with available information about the longest log and epoch length.
+     * If no such information exists, this is equivalent to electAnyLeader
+     */
+    private ElectionResult electLeaderWithLongestLogLength() {
+        return electLeaderWithStrategy(() -> targetReplicas.stream()
+                .filter(isAcceptableLeader::test)
+                .max((a, b) ->
+                        replicaLogLengthMap
+                                .getOrDefault(a, LogLengthInfoStore.EpochOffset.MIN)
+                                .compareTo(replicaLogLengthMap.getOrDefault(b, LogLengthInfoStore.EpochOffset.MIN))));
+    }
+
+    /**
+     * Assumes that the election type is either Election.ONLINE or Election.UNCLEAN
+     */
+    private ElectionResult electAnyLeader() {
+        return electLeaderWithStrategy(() -> targetReplicas.stream().filter(isAcceptableLeader::test).findFirst());
     }
 
     private boolean canElectLastKnownLeader() {

@@ -24,7 +24,8 @@ class LogRequestsAmortizer {
     public void addTopic(int brokerId, TopicIdPartition tp) {
         RecoveryLogRequestWork.Builder builder;
         if (builderMap.containsKey(brokerId)) {
-            builder = builderMap.get(brokerId).getLast();
+            List<RecoveryLogRequestWork.Builder> builders = builderMap.get(brokerId);
+            builder = builders.get(builders.size() - 1);
             builder.addTopic(tp);
         } else {
             var builders = new ArrayList<RecoveryLogRequestWork.Builder>();

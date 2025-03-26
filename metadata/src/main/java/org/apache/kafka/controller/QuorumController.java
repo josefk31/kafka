@@ -17,7 +17,6 @@
 
 package org.apache.kafka.controller;
 
-import org.apache.kafka.clients.KafkaClient;
 import org.apache.kafka.clients.admin.AlterConfigOp.OpType;
 import org.apache.kafka.clients.admin.FeatureUpdate;
 import org.apache.kafka.common.Uuid;
@@ -95,7 +94,7 @@ import org.apache.kafka.controller.errors.ControllerExceptions;
 import org.apache.kafka.controller.errors.EventHandlerExceptionInfo;
 import org.apache.kafka.controller.metrics.QuorumControllerMetrics;
 import org.apache.kafka.controller.recoverymanager.ElectionDriver;
-import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
 import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.deferred.DeferredEvent;
 import org.apache.kafka.deferred.DeferredEventQueue;
@@ -1897,7 +1896,7 @@ public final class QuorumController implements Controller {
     }
 
     @Override
-    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, ElectionStateMachineStore store) {
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
         if (topicIdPartitions.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }

@@ -62,7 +62,7 @@ import org.apache.kafka.common.requests.ApiError;
 import org.apache.kafka.controller.Controller;
 import org.apache.kafka.controller.ControllerRequestContext;
 import org.apache.kafka.controller.ResultOrError;
-import org.apache.kafka.controller.recoverymanager.ElectionStateMachineStore;
+import org.apache.kafka.controller.recoverymanager.LogLengthInfoStore;
 import org.apache.kafka.controller.recoverymanager.UncleanRecoveryResult;
 import org.apache.kafka.metadata.BrokerHeartbeatReply;
 import org.apache.kafka.metadata.BrokerRegistrationReply;
@@ -349,7 +349,7 @@ public class MockController implements Controller {
     }
 
     @Override
-    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, ElectionStateMachineStore store) {
+    public CompletableFuture<List<UncleanRecoveryResult>> performUncleanRecovery(List<TopicIdPartition> topicIdPartitions, LogLengthInfoStore store) {
         throw new UnsupportedOperationException();
     }
 
